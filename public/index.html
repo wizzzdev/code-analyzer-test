@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code Analyzer</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1c2230; --muted:#667085; --border:#e2e5ea; --accent:#4f46e5;
+    --critical:#b42318; --high:#e5484d; --medium:#f59e0b; --low:#3b82f6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1218; --card:#171b24; --text:#e8eaf0; --muted:#98a2b3; --border:#2a3040; --accent:#818cf8; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:20px 16px 0; max-width:1200px; margin:0 auto; }
+  h1 { margin:0; font-size:1.4rem; } header p { margin:4px 0 0; color:var(--muted); }
+  main { display:grid; grid-template-columns:1fr 1fr; gap:16px; max-width:1200px; margin:16px auto; padding:0 16px 32px; }
+  @media (max-width:800px) { main { grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px; min-width:0; }
+  .controls { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px; }
+  select, button, .file { font:inherit; padding:8px 12px; border-radius:8px; border:1px solid var(--border); background:var(--card); color:var(--text); }
+  .file { cursor:pointer; } .file input { display:none; }
+  textarea { width:100%; min-height:380px; resize:vertical; font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+    padding:10px; border-radius:8px; border:1px solid var(--border); background:var(--bg); color:var(--text); tab-size:2; }
+  #analyze { background:var(--accent); color:#fff; border-color:var(--accent); font-weight:600; margin-left:auto; display:inline-flex; gap:8px; align-items:center; }
+  #analyze:disabled { opacity:.7; cursor:wait; }
+  .spinner { width:14px; height:14px; border:2px solid rgba(255,255,255,.4); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; display:none; }
+  .loading .spinner { display:inline-block; } @keyframes spin { to { transform:rotate(360deg); } }
+  h2 { font-size:1rem; margin:18px 0 8px; } h2:first-child { margin-top:0; }
+  .muted { color:var(--muted); }
+  .metrics { display:flex; flex-wrap:wrap; gap:8px; }
+  .metric { border:1px solid var(--border); border-radius:8px; padding:8px 12px; }
+  .metric b { display:block; font-size:.75rem; text-transform:uppercase; color:var(--muted); letter-spacing:.04em; }
+  .issue { border:1px solid var(--border); border-left:4px solid var(--c); border-radius:8px; padding:10px 12px; margin-bottom:8px; }
+  .issue.critical { --c:var(--critical); } .issue.high { --c:var(--high); } .issue.medium { --c:var(--medium); } .issue.low { --c:var(--low); }
+  .tags { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px; font-size:.75rem; }
+  .tag { padding:1px 8px; border-radius:99px; border:1px solid var(--border); }
+  .tag.sev { background:var(--c); border-color:var(--c); color:#fff; font-weight:600; text-transform:uppercase; }
+  .fix { margin-top:6px; color:var(--muted); } .fix b { color:var(--text); }
+  ul { padding-left:20px; margin:0; }
+  .error { color:var(--critical); border:1px solid var(--critical); border-radius:8px; padding:10px 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Code Analyzer</h1>
+  <p>Paste or upload code and get an LLM-powered review.</p>
+</header>
+<main>
+  <section class="card">
+    <div class="controls">
+      <select id="language" aria-label="Language"></select>
+      <label class="file">Upload file<input type="file" id="file"></label>
+      <button id="analyze"><span class="spinner"></span><span id="label">Analyze</span></button>
+    </div>
+    <textarea id="code" spellcheck="false" placeholder="Paste your code here..."></textarea>
+  </section>
+  <section class="card" id="results" aria-live="polite">
+    <p class="muted">Results will appear here.</p>
+  </section>
+</main>
+<script>
+const LANGS = {python:"Python",javascript:"JavaScript",typescript:"TypeScript",java:"Java",go:"Go",rust:"Rust",c:"C",cpp:"C++",csharp:"C#",ruby:"Ruby",php:"PHP",swift:"Swift",kotlin:"Kotlin",sql:"SQL",bash:"Bash",other:"Other"};
+const EXT = {py:"python",js:"javascript",mjs:"javascript",jsx:"javascript",ts:"typescript",tsx:"typescript",java:"java",go:"go",rs:"rust",c:"c",h:"c",cpp:"cpp",cc:"cpp",cs:"csharp",rb:"ruby",php:"php",swift:"swift",kt:"kotlin",sql:"sql",sh:"bash"};
+const $ = (id) => document.getElementById(id);
+$("language").innerHTML = Object.entries(LANGS).map(([v, n]) => `<option value="${v}">${n}</option>`).join("");
+
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+$("file").addEventListener("change", async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  $("code").value = await f.text();
+  const lang = EXT[f.name.split(".").pop().toLowerCase()];
+  if (lang) $("language").value = lang;
+});
+
+function render(r) {
+  const issues = r.issues.length
+    ? r.issues.map((i) => `<div class="issue ${esc(i.severity)}">
+        <div class="tags"><span class="tag sev">${esc(i.severity)}</span><span class="tag">${esc(i.category)}</span>
+        <span class="tag">${i.line == null ? "general" : "line " + esc(i.line)}</span></div>
+        <div>${esc(i.description)}</div><div class="fix"><b>Fix:</b> ${esc(i.suggestion)}</div></div>`).join("")
+    : '<p class="muted">No issues found.</p>';
+  const m = r.metrics;
+  $("results").innerHTML = `
+    <h2>Summary</h2><p>${esc(r.summary)}</p>
+    <h2>Metrics</h2><div class="metrics">
+      <div class="metric"><b>Complexity</b>${esc(m.complexity)}</div>
+      <div class="metric"><b>Readability</b>${esc(m.readability)}</div>
+      <div class="metric"><b>Test coverage (est.)</b>${esc(m.test_coverage_estimate)}</div></div>
+    <h2>Issues (${r.issues.length})</h2>${issues}
+    <h2>Suggestions</h2>${r.suggestions.length ? "<ul>" + r.suggestions.map((s) => `<li>${esc(s)}</li>`).join("") + "</ul>" : '<p class="muted">None.</p>'}`;
+}
+
+$("analyze").addEventListener("click", async () => {
+  const btn = $("analyze"), code = $("code").value;
+  if (!code.trim()) { $("results").innerHTML = '<div class="error">Please enter some code first.</div>'; return; }
+  btn.disabled = true; btn.classList.add("loading"); $("label").textContent = "Analyzing…";
+  $("results").innerHTML = '<p class="muted">Analyzing your code…</p>';
+  try {
+    const res = await fetch("/analyze", { method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ code, language: $("language").value }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    render(data);
+  } catch (err) {
+    $("results").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+  } finally {
+    btn.disabled = false; btn.classList.remove("loading"); $("label").textContent = "Analyze";
+  }
+});
+</script>
+</body>
+</html>
